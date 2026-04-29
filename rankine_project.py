@@ -210,6 +210,7 @@ ax.set_ylabel("Thermal Efficiency (%)")
 ax.grid(True)
 
 st.pyplot(fig)
+
 st.subheader("Boiler Pressure Study Table")
 study_table = pd.DataFrame({
     "Boiler Pressure (kPa)": Pb_range,
