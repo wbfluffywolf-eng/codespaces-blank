@@ -41,7 +41,7 @@ def pump(h, v, P1, P2):
 # -----------------------------
 # Main cycle solver
 # -----------------------------
-def solve(Pb=8000, Pc=10, Pr=300, Ph=6000, Pl=3500, Po=100, Tin=400):
+def solve(Pb=8000, Pc=10, Pr=300, Ph=6000, Pl=3500, Po=100, Tin=400, m_dot_boiler=1.0):
     stt = {}
 
     # Feedwater path
@@ -150,20 +150,53 @@ def solve(Pb=8000, Pc=10, Pr=300, Ph=6000, Pl=3500, Po=100, Tin=400):
     Wnet = Wt_total - Wp_total
     eta = Wnet / Q_in * 100
 
+    # ---------------------------------------------------------
+    # Mass flow rates by state
+    # ---------------------------------------------------------
+    # The cycle is normalized to 1 kg/s through the boiler.
+    # Multiplying each fraction by m_dot_boiler gives actual kg/s.
+    # For extraction states, the listed mass flow is the extracted stream.
+    m_frac_by_state = {
+        1: 1 - yH - yL - yO,   # condenser outlet
+        2: 1 - yH - yL - yO,   # first pump outlet, entering open FWH
+        3: 1 - yH - yL,        # open FWH outlet
+        4: 1 - yH - yL,        # pump outlet to low closed FWH
+        5: 1 - yH - yL,        # low closed FWH feedwater outlet
+        6: 1 - yH - yL,        # pump outlet before low-drain mixing
+        7: yL,                 # low closed FWH drain stream
+        8: 1 - yH,             # mixture after low drain is added
+        9: 1 - yH,             # high closed FWH feedwater outlet
+        10: 1 - yH,            # pump outlet to boiler-pressure mixer
+        11: yH,                # high closed FWH drain stream
+        12: 1.0,               # mixture entering boiler
+        13: 1.0,               # boiler outlet / turbine inlet
+        14: yH,                # high-pressure extraction steam to high closed FWH
+        15: yL,                # low-pressure extraction steam to low closed FWH
+        16: 1 - yH - yL,       # flow to reheater
+        17: 1 - yH - yL,       # reheater outlet
+        18: yO,                # extraction steam to open FWH
+        19: 1 - yH - yL - yO   # final turbine exhaust to condenser
+    }
+
     state_table = pd.DataFrame.from_dict(stt, orient="index")
     state_table.index.name = "State"
     state_table = state_table.reset_index()
+    state_table["m_dot_fraction"] = state_table["State"].map(m_frac_by_state)
+    state_table["m_dot_kg_s"] = state_table["m_dot_fraction"] * m_dot_boiler
     state_table = state_table.sort_values("State")
     state_table = state_table.round(4)
 
     mass_flows = {
-        "Mass through boiler": 1.0,
-        "High closed FWH bleed yH": yH,
-        "Low closed FWH bleed yL": yL,
-        "Open FWH bleed yO": yO,
-        "Flow after high bleed": 1 - yH,
-        "Flow after low bleed": 1 - yH - yL,
-        "Flow to condenser": 1 - yH - yL - yO
+        "High closed FWH bleed fraction yH": yH,
+        "Low closed FWH bleed fraction yL": yL,
+        "Open FWH bleed fraction yO": yO,
+        "Boiler mass flow rate (kg/s)": m_dot_boiler,
+        "High closed FWH bleed flow, state 14 (kg/s)": yH * m_dot_boiler,
+        "Low closed FWH bleed flow, state 15 (kg/s)": yL * m_dot_boiler,
+        "Open FWH bleed flow, state 18 (kg/s)": yO * m_dot_boiler,
+        "Flow after high bleed, states 8-10 (kg/s)": (1 - yH) * m_dot_boiler,
+        "Flow after low bleed, states 3-6 and 16-17 (kg/s)": (1 - yH - yL) * m_dot_boiler,
+        "Flow to condenser, states 1-2 and 19 (kg/s)": (1 - yH - yL - yO) * m_dot_boiler
     }
 
     component_results = {
@@ -205,18 +238,24 @@ with st.sidebar:
     Pl = st.number_input("Low Closed FWH Pressure (kPa)", value=3500)
     Po = st.number_input("Open FWH Pressure (kPa)", value=100)
     Tin = st.number_input("Turbine Inlet Temperature (°C)", value=400)
+    m_dot_boiler = st.number_input("Boiler Mass Flow Rate (kg/s)", value=1.0, min_value=0.0)
 
-state_table, mass_flows, component_results = solve(Pb, Pc, Pr, Ph, Pl, Po, Tin)
+state_table, mass_flows, component_results = solve(Pb, Pc, Pr, Ph, Pl, Po, Tin, m_dot_boiler)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Thermal Efficiency", f"{component_results['Thermal Efficiency (%)']:.3f}%")
 col2.metric("Net Work", f"{component_results['Net Work (kJ/kg)']:.2f} kJ/kg")
 col3.metric("Heat Input", f"{component_results['Total Heat Input (kJ/kg)']:.2f} kJ/kg")
 
+st.title("Rankine Reheat-Regenerative Cycle Solver")
+
+st.subheader("Cycle Diagram")
+st.image("cycle_diagram.png", caption="Reheat-Regenerative Rankine Cycle", width="stretch")
+
 st.subheader("State Table")
 st.dataframe(state_table, height=500, width="stretch")
 
-st.subheader("Mass Flowrates")
+st.subheader("Mass Flow Rates Summary")
 mass_table = pd.DataFrame(mass_flows.items(), columns=["Quantity", "Value"]).round(6)
 st.dataframe(mass_table, height=280, width="stretch")
 
@@ -231,7 +270,7 @@ eff_boiler = []
 
 for P in Pb_range:
     try:
-        _, _, r = solve(Pb=P, Pc=Pc, Pr=Pr, Ph=Ph, Pl=Pl, Po=Po, Tin=Tin)
+        _, _, r = solve(Pb=P, Pc=Pc, Pr=Pr, Ph=Ph, Pl=Pl, Po=Po, Tin=Tin, m_dot_boiler=m_dot_boiler)
         eff_boiler.append(r["Thermal Efficiency (%)"])
     except:
         eff_boiler.append(np.nan)
@@ -257,30 +296,10 @@ eff_open = []
 
 for Popen in Po_range:
     try:
-        _, _, r = solve(Pb=Pb, Pc=Pc, Pr=Pr, Ph=Ph, Pl=Pl, Po=Popen, Tin=Tin)
+        _, _, r = solve(Pb=Pb, Pc=Pc, Pr=Pr, Ph=Ph, Pl=Pl, Po=Popen, Tin=Tin, m_dot_boiler=m_dot_boiler)
         eff_open.append(r["Thermal Efficiency (%)"])
     except:
         eff_open.append(np.nan)
-
-fig2, ax2 = plt.subplots()
-ax2.plot(Po_range, eff_open, marker="o")
-ax2.set_xlabel("Open FWH Pressure (kPa)")
-ax2.set_ylabel("Thermal Efficiency (%)")
-ax2.grid(True)
-st.pyplot(fig2)
-
-open_table = pd.DataFrame({
-    "Open FWH Pressure (kPa)": Po_range,
-    "Efficiency (%)": eff_open
-}).round(4)
-
-st.dataframe(open_table, height=350, width="stretch")
-
-best_index = np.nanargmax(eff_open)
-st.success(
-    f"Best open FWH pressure in this range: {Po_range[best_index]:.2f} kPa "
-    f"with efficiency {eff_open[best_index]:.3f}%"
-)
 st.subheader("T-s Diagram")
 
 # Use the current state table
@@ -335,3 +354,22 @@ ax_ts.grid(True)
 ax_ts.legend()
 
 st.pyplot(fig_ts)
+fig2, ax2 = plt.subplots()
+ax2.plot(Po_range, eff_open, marker="o")
+ax2.set_xlabel("Open FWH Pressure (kPa)")
+ax2.set_ylabel("Thermal Efficiency (%)")
+ax2.grid(True)
+st.pyplot(fig2)
+
+open_table = pd.DataFrame({
+    "Open FWH Pressure (kPa)": Po_range,
+    "Efficiency (%)": eff_open
+}).round(4)
+
+st.dataframe(open_table, height=350, width="stretch")
+
+best_index = np.nanargmax(eff_open)
+st.success(
+    f"Best open FWH pressure in this range: {Po_range[best_index]:.2f} kPa "
+    f"with efficiency {eff_open[best_index]:.3f}%"
+)
