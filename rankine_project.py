@@ -281,3 +281,57 @@ st.success(
     f"Best open FWH pressure in this range: {Po_range[best_index]:.2f} kPa "
     f"with efficiency {eff_open[best_index]:.3f}%"
 )
+st.subheader("T-s Diagram")
+
+# Use the current state table
+ts_df = state_table.copy()
+
+# Drop states with missing entropy or temperature
+ts_plot = ts_df.dropna(subset=["s", "T_C"])
+
+fig_ts, ax_ts = plt.subplots()
+
+# Saturation dome
+T_vals = np.linspace(5, 370, 300)
+s_f = []
+s_g = []
+
+for T in T_vals:
+    try:
+        sf_val = CP.PropsSI("S", "T", T + 273.15, "Q", 0, WATER) / 1000
+        sg_val = CP.PropsSI("S", "T", T + 273.15, "Q", 1, WATER) / 1000
+        s_f.append(sf_val)
+        s_g.append(sg_val)
+    except:
+        s_f.append(np.nan)
+        s_g.append(np.nan)
+
+ax_ts.plot(s_f, T_vals, label="Saturated Liquid Line")
+ax_ts.plot(s_g, T_vals, label="Saturated Vapor Line")
+
+# Cycle path
+ax_ts.plot(
+    ts_plot["s"],
+    ts_plot["T_C"],
+    marker="o",
+    linewidth=2,
+    label="Rankine Cycle"
+)
+
+# Label states
+for _, row in ts_plot.iterrows():
+    ax_ts.annotate(
+        int(row["State"]),
+        (row["s"], row["T_C"]),
+        textcoords="offset points",
+        xytext=(5, 5),
+        fontsize=9
+    )
+
+ax_ts.set_xlabel("Entropy, s (kJ/kg·K)")
+ax_ts.set_ylabel("Temperature, T (°C)")
+ax_ts.set_title("T-s Diagram for Reheat-Regenerative Rankine Cycle")
+ax_ts.grid(True)
+ax_ts.legend()
+
+st.pyplot(fig_ts)
